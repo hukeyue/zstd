@@ -7,7 +7,12 @@
 # in the COPYING file in the root directory of this source tree).
 # ################################################################
 
-project(libzstd C ASM)
+project(libzstd NONE)
+
+enable_language(C)
+if (NOT COMPILER_MSVC)
+  enable_language(ASM)
+endif()
 
 set(CMAKE_INCLUDE_CURRENT_DIR TRUE)
 option(ZSTD_BUILD_STATIC "BUILD STATIC LIBRARIES" ON)
@@ -36,7 +41,7 @@ endif()
 file(GLOB CommonSources ${LIBRARY_DIR}/common/*.c)
 file(GLOB CompressSources ${LIBRARY_DIR}/compress/*.c)
 file(GLOB DecompressSources ${LIBRARY_DIR}/decompress/*.c)
-if (MSVC)
+if (COMPILER_MSVC)
     add_compile_options(-DZSTD_DISABLE_ASM)
 else ()
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "amd64.*|AMD64.*|x86_64.*|X86_64.*")
@@ -216,6 +221,10 @@ if (ZSTD_BUILD_STATIC)
             POSITION_INDEPENDENT_CODE On
             OUTPUT_NAME ${STATIC_LIBRARY_BASE_NAME})
 endif ()
+
+if (NOT ZSTD_INSTALL)
+  return()
+endif()
 
 # pkg-config
 include(JoinPaths) # can be replaced by cmake_path(APPEND) in CMake 3.20
