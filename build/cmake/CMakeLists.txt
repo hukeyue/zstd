@@ -184,6 +184,12 @@ add_custom_target(clean-all
 # This section is based on the boiler plate code from:
 # https://cmake.org/cmake/help/latest/manual/cmake-packages.7.html#creating-packages
 #-----------------------------------------------------------------------------
+option(ZSTD_INSTALL "Install ZSTD" ON)
+
+if (NOT ZSTD_INSTALL)
+  return()
+endif()
+
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/zstdConfigVersion.cmake"
