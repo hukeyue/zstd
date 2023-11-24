@@ -34,6 +34,165 @@ int g_ZSTD_threading_useless_symbol;
 
 /* ===  Implementation  === */
 
+
+#if _WIN32_WINNT < 0x0600
+
+#define ZSTD_DEPS_NEED_MALLOC
+#include "zstd_deps.h"
+
+typedef struct {
+  int nwaiters_blocked;
+  int nwaiters_gone;
+  int nwaiters_to_unblock;
+  int reserved;
+  HANDLE sem_block_queue;
+  HANDLE sem_block_lock;
+  CRITICAL_SECTION mtx_unblock_lock;
+} ZSTD_pthread_cond_do_t;
+#define _ZSTD_SEMAPHORE_MAX LONG_MAX
+
+static inline void
+__ZSTD_pthread_cond_do_signal(ZSTD_pthread_cond_do_t *__cond, BOOL __broadcast)
+{
+  int nsignal = 0;
+
+  EnterCriticalSection(&__cond->mtx_unblock_lock);
+  if (__cond->nwaiters_to_unblock != 0) {
+    if (__cond->nwaiters_blocked == 0) {
+      LeaveCriticalSection(&__cond->mtx_unblock_lock);
+      return;
+    }
+    if (__broadcast) {
+      __cond->nwaiters_to_unblock += nsignal = __cond->nwaiters_blocked;
+      __cond->nwaiters_blocked = 0;
+    } else {
+      nsignal = 1;
+      __cond->nwaiters_to_unblock++;
+      __cond->nwaiters_blocked--;
+    }
+  } else if (__cond->nwaiters_blocked > __cond->nwaiters_gone) {
+    WaitForSingleObject(__cond->sem_block_lock, INFINITE);
+    if (__cond->nwaiters_gone != 0) {
+      __cond->nwaiters_blocked -= __cond->nwaiters_gone;
+      __cond->nwaiters_gone = 0;
+    }
+    if (__broadcast) {
+      nsignal = __cond->nwaiters_to_unblock = __cond->nwaiters_blocked;
+      __cond->nwaiters_blocked = 0;
+    } else {
+      nsignal = __cond->nwaiters_to_unblock = 1;
+      __cond->nwaiters_blocked--;
+    }
+  }
+  LeaveCriticalSection(&__cond->mtx_unblock_lock);
+
+  if (0 < nsignal)
+    ReleaseSemaphore(__cond->sem_block_queue, nsignal, NULL);
+}
+
+static inline int
+__ZSTD_pthread_cond_do_wait(ZSTD_pthread_cond_do_t *__cond,
+                            ZSTD_pthread_mutex_t *__m)
+{
+  int nleft = 0;
+  int nnwaiters_gone = 0;
+  int timeout = 0;
+  DWORD w;
+
+  WaitForSingleObject(__cond->sem_block_lock, INFINITE);
+  __cond->nwaiters_blocked++;
+  ReleaseSemaphore(__cond->sem_block_lock, 1, NULL);
+
+  ZSTD_pthread_mutex_unlock(__m);
+
+  w = WaitForSingleObject(__cond->sem_block_queue, INFINITE);
+  timeout = (w == WAIT_TIMEOUT);
+
+  EnterCriticalSection(&__cond->mtx_unblock_lock);
+  if ((nleft = __cond->nwaiters_to_unblock) != 0) {
+    if (timeout) {
+      if (__cond->nwaiters_blocked != 0) {
+        __cond->nwaiters_blocked--;
+      } else {
+        __cond->nwaiters_gone++;
+      }
+    }
+    if (--__cond->nwaiters_to_unblock == 0) {
+      if (__cond->nwaiters_blocked != 0) {
+        ReleaseSemaphore(__cond->sem_block_lock, 1, NULL);
+        nleft = 0;
+      }
+      else if ((nnwaiters_gone = __cond->nwaiters_gone) != 0) {
+        __cond->nwaiters_gone = 0;
+      }
+    }
+  } else if (++__cond->nwaiters_gone == INT_MAX / 2) {
+    WaitForSingleObject(__cond->sem_block_lock, INFINITE);
+    __cond->nwaiters_blocked -= __cond->nwaiters_gone;
+    ReleaseSemaphore(__cond->sem_block_lock, 1, NULL);
+    __cond->nwaiters_gone = 0;
+  }
+  LeaveCriticalSection(&__cond->mtx_unblock_lock);
+
+  if (nleft == 1) {
+    while (nnwaiters_gone--)
+      WaitForSingleObject(__cond->sem_block_queue, INFINITE);
+    ReleaseSemaphore(__cond->sem_block_lock, 1, NULL);
+  }
+
+  ZSTD_pthread_mutex_lock(__m);
+  return timeout ? /* busy */ ETIMEDOUT : 0;
+}
+
+int ZSTD_pthread_cond_init(ZSTD_pthread_cond_t *__cv, const void* attr)
+{
+  (void)attr;
+
+  ZSTD_pthread_cond_do_t* __cond = (void*)ZSTD_malloc(sizeof(ZSTD_pthread_cond_do_t));
+  __cond->nwaiters_blocked = 0;
+  __cond->nwaiters_gone = 0;
+  __cond->nwaiters_to_unblock = 0;
+  __cond->reserved = 0;
+  __cond->sem_block_queue = CreateSemaphore(NULL, 0, _ZSTD_SEMAPHORE_MAX,
+                                            NULL);
+  __cond->sem_block_lock = CreateSemaphore(NULL, 1, 1, NULL);
+  InitializeCriticalSection(&__cond->mtx_unblock_lock);
+  *(ZSTD_pthread_cond_do_t**)(__cv) = __cond;
+  return 0;
+}
+
+int ZSTD_pthread_cond_signal(ZSTD_pthread_cond_t *__cv)
+{
+  ZSTD_pthread_cond_do_t* __do_cv = *(ZSTD_pthread_cond_do_t**)(__cv);
+  __ZSTD_pthread_cond_do_signal(__do_cv, FALSE);
+  return 0;
+}
+
+int ZSTD_pthread_cond_broadcast(ZSTD_pthread_cond_t *__cv)
+{
+  ZSTD_pthread_cond_do_t* __do_cv = *(ZSTD_pthread_cond_do_t**)(__cv);
+  __ZSTD_pthread_cond_do_signal(__do_cv, TRUE);
+  return 0;
+}
+
+int ZSTD_pthread_cond_wait(ZSTD_pthread_cond_t *__cv, ZSTD_pthread_mutex_t *__m)
+{
+  ZSTD_pthread_cond_do_t* __do_cv = *(ZSTD_pthread_cond_do_t**)(__cv);
+  return __ZSTD_pthread_cond_do_wait(__do_cv, __m);
+}
+
+int ZSTD_pthread_cond_destroy(ZSTD_pthread_cond_t *__cv)
+{
+  ZSTD_pthread_cond_do_t* __cond = *(ZSTD_pthread_cond_do_t**)(__cv);
+  CloseHandle(__cond->sem_block_queue);
+  CloseHandle(__cond->sem_block_lock);
+  DeleteCriticalSection(&__cond->mtx_unblock_lock);
+  ZSTD_free(__cond);
+  return 0;
+}
+
+#endif
+
 typedef struct {
     void* (*start_routine)(void*);
     void* arg;
