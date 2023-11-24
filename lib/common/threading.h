@@ -22,28 +22,31 @@ extern "C" {
 
 #if defined(ZSTD_MULTITHREAD) && defined(_WIN32)
 
-/**
- * Windows minimalist Pthread Wrapper
- */
-#ifdef WINVER
-#  undef WINVER
-#endif
-#define WINVER       0x0600
-
-#ifdef _WIN32_WINNT
-#  undef _WIN32_WINNT
-#endif
-#define _WIN32_WINNT 0x0600
-
-#ifndef WIN32_LEAN_AND_MEAN
-#  define WIN32_LEAN_AND_MEAN
-#endif
-
 #undef ERROR   /* reported already defined on VS 2015 (Rich Geldreich) */
 #include <windows.h>
 #undef ERROR
 #define ERROR(name) ZSTD_ERROR(name)
 
+#if _WIN32_WINNT < 0x0600
+
+/* mutex */
+#define ZSTD_pthread_mutex_t           CRITICAL_SECTION
+#define ZSTD_pthread_mutex_init(a, b)  ((void)(b), InitializeCriticalSection((a)), 0)
+#define ZSTD_pthread_mutex_destroy(a)  DeleteCriticalSection((a))
+#define ZSTD_pthread_mutex_lock(a)     EnterCriticalSection((a))
+#define ZSTD_pthread_mutex_unlock(a)   LeaveCriticalSection((a))
+
+/* condition variable */
+
+typedef void* ZSTD_pthread_cond_t;
+
+int ZSTD_pthread_cond_init(ZSTD_pthread_cond_t *__cv, const void* attr);
+int ZSTD_pthread_cond_destroy(ZSTD_pthread_cond_t *__cv);
+int ZSTD_pthread_cond_wait(ZSTD_pthread_cond_t *__cv, ZSTD_pthread_mutex_t *__m);
+int ZSTD_pthread_cond_signal(ZSTD_pthread_cond_t *__cv);
+int ZSTD_pthread_cond_broadcast(ZSTD_pthread_cond_t *__cv);
+
+#else //  _WIN32_WINNT < 0x0600
 
 /* mutex */
 #define ZSTD_pthread_mutex_t           SRWLOCK
@@ -59,6 +62,8 @@ extern "C" {
 #define ZSTD_pthread_cond_wait(a, b)    SleepConditionVariableSRW((a), (b), INFINITE, 0)
 #define ZSTD_pthread_cond_signal(a)     WakeConditionVariable((a))
 #define ZSTD_pthread_cond_broadcast(a)  WakeAllConditionVariable((a))
+
+#endif //  _WIN32_WINNT < 0x0600
 
 /* ZSTD_pthread_create() and ZSTD_pthread_join() */
 typedef HANDLE ZSTD_pthread_t;
