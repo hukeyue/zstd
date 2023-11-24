@@ -46,17 +46,17 @@ extern "C" {
 
 
 /* mutex */
-#define ZSTD_pthread_mutex_t           CRITICAL_SECTION
-#define ZSTD_pthread_mutex_init(a, b)  ((void)(b), InitializeCriticalSection((a)), 0)
-#define ZSTD_pthread_mutex_destroy(a)  DeleteCriticalSection((a))
-#define ZSTD_pthread_mutex_lock(a)     EnterCriticalSection((a))
-#define ZSTD_pthread_mutex_unlock(a)   LeaveCriticalSection((a))
+#define ZSTD_pthread_mutex_t           SRWLOCK
+#define ZSTD_pthread_mutex_init(a, b)  ((void)(b), InitializeSRWLock((a)), 0)
+#define ZSTD_pthread_mutex_destroy(a)  ((void)(a))
+#define ZSTD_pthread_mutex_lock(a)     AcquireSRWLockExclusive((a))
+#define ZSTD_pthread_mutex_unlock(a)   ReleaseSRWLockExclusive((a))
 
 /* condition variable */
 #define ZSTD_pthread_cond_t             CONDITION_VARIABLE
 #define ZSTD_pthread_cond_init(a, b)    ((void)(b), InitializeConditionVariable((a)), 0)
 #define ZSTD_pthread_cond_destroy(a)    ((void)(a))
-#define ZSTD_pthread_cond_wait(a, b)    SleepConditionVariableCS((a), (b), INFINITE)
+#define ZSTD_pthread_cond_wait(a, b)    SleepConditionVariableSRW((a), (b), INFINITE, 0)
 #define ZSTD_pthread_cond_signal(a)     WakeConditionVariable((a))
 #define ZSTD_pthread_cond_broadcast(a)  WakeAllConditionVariable((a))
 
